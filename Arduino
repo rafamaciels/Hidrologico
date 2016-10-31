@@ -1,0 +1,138 @@
+#include <SPI.h>
+#include <Ethernet.h>
+
+// MAC Address da placa Ethernet
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+IPAddress ip(192, 168, 0, 82); // IP, Talvez seja necessário alterar dependendo da rede
+EthernetServer server(80); // Servidor na porta 80
+
+#define CHAVE 2
+int inicio, pulsos; 
+boolean pulso; 
+String HTTP_req; // Armazeno o HTTP Request
+
+void setup(){
+	pulso=HIGH; 
+	pinMode(CHAVE,INPUT);
+	
+	// Abro o serial de comunicação e espéro a porta abrir:
+	pulsos=0;
+	Serial.begin(9600);
+	while (!Serial) {
+		; // Espero pela porta serial se conectar. 
+	}
+	Ethernet.begin(mac, ip); // Inicializo dispositivo Ethernet
+	server.begin(); // Inicializo o server para o client
+	pinMode(3, INPUT); // switch esta ligado para o pino 3 do Arduino
+	Serial.print("O servidor é: ");
+	Serial.println(Ethernet.localIP());
+	Serial.println("\nEntre Volume:"); 
+	while(pulsos==0) { 
+		if (Serial.available() > 0) { 
+			pulsos= Serial.parseInt(); 
+		} 
+	} 
+	Serial.println(pulsos); 
+	delay(1000);
+}
+
+void loop() {
+	if (digitalRead (2) == HIGH) {
+		if(pulso == HIGH){
+			pulsos++; 
+		}
+		pulso = LOW; 
+	}
+	else{
+		pulso= HIGH; 
+	}
+	EthernetClient client = server.available(); // Obtenho o cliente
+	if (client) { //É um cliente?
+		boolean currentLineIsBlank = true;
+		while (client.connected()) {
+			if (client.available()) { // Dados do cliente disponíveis para leitura
+			char c = client.read(); // Ler 1 byte (caracter) do client
+			HTTP_req += c; // Salvo o HTTP Request por um tempo
+			// Ultima linha de solicitação do cliente está em branco e termina com \n
+			// Dar resposta ao client só depois da última linha recebida
+			if (c == '\n' && currentLineIsBlank) {
+				// envio um cabeçalho de resposta HTTP padrão
+				client.println("HTTP/1.1 200 OK");
+				client.println("Content-Type: text/html");
+				client.println("Connection: keep-alive");
+				client.println();
+				// Pedido do AJAX para o estado do switch
+					if (HTTP_req.indexOf("ajax_switch") > -1) {
+						// Ler o estado do switch e envio o texto do parágrafo apropriado
+						GetSwitchState(client);
+					}
+					else { // HTTP Request da paguina web
+						// envio da página da web - contém JavaScript com chamadas AJAX
+						client.println("<!DOCTYPE html>");
+						client.println("<html>");
+						client.println("<head>");
+						client.println("<title>Pagina de Medicao</title>");
+						client.println("<script>");
+						client.println("function GetSwitchState() {");
+						client.println("nocache = \"&nocache=\"\
+						+ Math.random() * 1000000;");
+						client.println("var request = new XMLHttpRequest();");
+						client.println("request.onreadystatechange = function() {");
+						client.println("if (this.readyState == 4) {");
+						client.println("if (this.status == 200) {");
+						client.println("if (this.responseText != null) {");
+						client.println("document.getElementById(\"switch_txt\")\
+						.innerHTML = this.responseText;");
+						client.println("}}}}");
+						client.println(
+						"request.open(\"GET\", \"ajax_switch\" + nocache, true);");
+						//client.println("request.open(\"GET\", \"ajax_switch\", true);");
+						client.println("request.send(null);");
+						client.println("}");
+						client.println("</script>");
+						client.println("</head>");
+						client.println("<body>");
+						client.println("<h1>Sistema de Medicao</h1>");
+						client.println(
+						"<p id=\"switch_txt\">Switch state: Not requested...</p>");
+						client.println("<button type=\"button\"\
+						onclick=\"GetSwitchState()\">Botao de Medicao</button>");
+						client.println("</body>");
+						client.println("</html>");
+					}
+					// O display recebeu o pedido de HTTP na porta serial
+					Serial.print(HTTP_req);
+					HTTP_req = ""; // Limpo o HTTP Request apos terminar
+					break;
+				}
+				// cada linha de texto recebidas do cliente termina com \r \n
+				if (c == '\n') {
+					// último caractere na linha de texto recebidas
+					// começando nova linha com o próximo caractere lido
+					currentLineIsBlank = true;
+				} 
+				else if (c != '\r') {
+					// um caracter do texto recebido pelo client
+					currentLineIsBlank = false;
+				}
+			} // end if (client.available())
+		} // end while (client.connected())
+		delay(1); // Do um tempo ao navegador Web para receber os dados
+		client.stop(); //fecho a conexão
+	} // end if (client)
+}
+
+// Envio o estado do switch para o navegador web
+void GetSwitchState(EthernetClient cl) {
+	if (digitalRead(3)) {
+		cl.println("Chave habilitada: ON");
+
+		cl.println("Volume Medido: ");
+		cl.println(pulsos);
+		cl.println(" Litros ");
+		cl.println("<br />");
+	}
+	else {
+		cl.println("chave desabilitada: OFF");
+	}
+}
